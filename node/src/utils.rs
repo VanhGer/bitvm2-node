@@ -84,8 +84,9 @@ use crate::scheduled_tasks::graph_maintenance_tasks::{
 };
 use bitcoin_light_client_circuit::hash_operator_constant;
 use bitvm_lib::babe_adapter::{
-    BABE_M_CC, BabeVerifierPrivateState, CACSetupPackage, FinalizedInstanceData, Seed,
-    SolderingData, compact_soldering_proof_payload,
+    BABE_M_CC, BabeVerifierPrivateState, CACSetupPackage, DYNAMIC_SLOTS, FinalizedInstanceData,
+    NUM_PUBLIC_INPUTS, STATIC_SLOTS, Seed, SolderingData, StaticInputs,
+    compact_soldering_proof_payload, ziren_static_inputs,
 };
 use bitvm_lib::transactions::base::BaseTransaction;
 use client::goat_chain::{DisproveTxType, GraphData, PeginStatus, WithdrawStatus};
@@ -108,8 +109,7 @@ use zkm_recursion_core::stark::KoalaBearPoseidon2Outer;
 use zkm_sdk::ZKMProofWithPublicValues;
 use zkm_stark::PartStarkVerifyingKey;
 use zkm_verifier::{
-    IMM_GROTH16_VK_BYTES, convert_ark_imm_wrap_vk, decode_zkm_vkey_hash,
-    load_ark_public_inputs_from_bytes,
+    IMM_GROTH16_VK_BYTES, VK_ROOT_BYTES, convert_ark_imm_wrap_vk, decode_zkm_vkey_hash,
 };
 
 pub const SELF_SENDER: &str = "self";
@@ -148,7 +148,7 @@ pub struct ValidatedOperatorProof {
 
 #[derive(Clone)]
 pub struct OperatorStatement {
-    pub static_input: ark_bn254::Fr,
+    pub static_inputs: StaticInputs,
     pub vk_hash: [u8; 32],
     pub zkm_version: String,
     pub constant: [u8; 32],
@@ -2592,10 +2592,13 @@ fn convert_operator_proof_to_ark(
 }
 
 pub fn operator_assert_dynamic_input(public_inputs: &[ark_bn254::Fr]) -> Result<ark_bn254::Fr> {
-    if public_inputs.len() != 2 {
-        bail!("operator proof has {} public inputs; expected 2", public_inputs.len());
+    if public_inputs.len() != NUM_PUBLIC_INPUTS {
+        bail!(
+            "operator proof has {} public inputs; expected {NUM_PUBLIC_INPUTS}",
+            public_inputs.len()
+        );
     }
-    Ok(public_inputs[1])
+    Ok(public_inputs[DYNAMIC_SLOTS[0]])
 }
 
 fn combined_operator_vk_hash(operator_vk_hash: &str, zkm_version: &str) -> Result<[u8; 32]> {
@@ -2622,16 +2625,16 @@ fn combined_operator_vk_hash(operator_vk_hash: &str, zkm_version: &str) -> Resul
     Ok(encoded)
 }
 
-fn operator_identity() -> Result<([u8; 32], String, ark_bn254::Fr)> {
+fn operator_identity() -> Result<([u8; 32], String, StaticInputs)> {
     let vk_hash = get_operator_vk_hash()?;
     let zkm_version = get_operator_zkm_version()?;
     let combined_hash =
         combined_operator_vk_hash(&format!("0x{}", hex::encode(vk_hash)), &zkm_version)?;
-    let static_input = load_ark_public_inputs_from_bytes(&combined_hash, &[0u8; 32])[0];
-    Ok((vk_hash, zkm_version, static_input))
+    let static_inputs = ziren_static_inputs(&combined_hash, &VK_ROOT_BYTES);
+    Ok((vk_hash, zkm_version, static_inputs))
 }
 
-pub fn derive_operator_static_input() -> Result<ark_bn254::Fr> {
+pub fn derive_operator_static_inputs() -> Result<StaticInputs> {
     Ok(operator_identity()?.2)
 }
 
@@ -2641,7 +2644,7 @@ pub fn derive_operator_statement(
     challenge_init_txid: [u8; 32],
     watchtower_pubkeys: &[XOnlyPublicKey],
 ) -> Result<OperatorStatement> {
-    let (vk_hash, zkm_version, static_input) = operator_identity()?;
+    let (vk_hash, zkm_version, static_inputs) = operator_identity()?;
     let key_bytes = watchtower_pubkeys.iter().map(XOnlyPublicKey::serialize).collect::<Vec<_>>();
     let constant = hash_operator_constant(
         *graph_id.as_bytes(),
@@ -2649,7 +2652,7 @@ pub fn derive_operator_statement(
         challenge_init_txid,
         &key_bytes,
     );
-    Ok(OperatorStatement { static_input, vk_hash, zkm_version, constant })
+    Ok(OperatorStatement { static_inputs, vk_hash, zkm_version, constant })
 }
 
 /// Returns:
@@ -2783,11 +2786,14 @@ pub async fn get_operator_proof(
     }
 
     let ark_proof = convert_operator_proof_to_ark(&proof, &proof_data.vk)?;
-    let Some(static_input) = ark_proof.public_inputs.first() else {
-        bail!("operator proof has no public inputs");
-    };
-    if *static_input != statement.static_input {
-        bail!("operator proof static public input does not match graph setup statement");
+    // Checks every static slot (vk hash and vk root).
+    let public_inputs = &ark_proof.public_inputs;
+    if !STATIC_SLOTS
+        .iter()
+        .zip(&statement.static_inputs)
+        .all(|(&slot, expected)| public_inputs[slot] == *expected)
+    {
+        bail!("operator proof static public inputs do not match graph setup statement");
     }
 
     Ok((

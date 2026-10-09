@@ -1845,9 +1845,9 @@ async fn handle_init_graph_verifier(context: &HeavyTaskContext, message: InitGra
     } else {
         get_babe_gc_asset_paths()?;
         let vk = crate::vk::get_vk().await.context("load Groth16 verifying key for BABE setup")?;
-        let static_input = derive_operator_static_input()?;
+        let static_inputs = derive_operator_static_inputs()?;
         let (setup_package, private_state) = tokio::task::spawn_blocking(move || {
-            build_real_setup_package(BABE_N_CC, &vk, static_input)
+            build_real_setup_package(BABE_N_CC, &vk, static_inputs)
         })
         .await
         .context("real BABE setup task failed")??;
@@ -2170,7 +2170,7 @@ async fn handle_cut_circuits_verifier(
     get_babe_gc_asset_paths()?;
 
     let vk = crate::vk::get_vk().await.context("load Groth16 verifying key for BABE opening")?;
-    let static_input = derive_operator_static_input()?;
+    let static_inputs = derive_operator_static_inputs()?;
     let private_state = verifier_state.private_state.clone();
     let selected_indices = selected_circuit_indexes.clone();
     let package_for_opening = setup_package.clone();
@@ -2187,7 +2187,7 @@ async fn handle_cut_circuits_verifier(
             &package_for_opening,
             &selected_indices,
             &vk,
-            static_input,
+            static_inputs,
         )
     })
     .await
@@ -2513,7 +2513,7 @@ async fn handle_compact_soldering_proof_operator(
     );
 
     let vk = crate::vk::get_vk().await.context("load Groth16 verifying key for BABE validation")?;
-    let static_input = derive_operator_static_input()?;
+    let static_inputs = derive_operator_static_inputs()?;
     let package_for_validation = setup_package.clone();
     let opened_for_validation = opened.clone();
     let finalized_for_validation = finalized.clone();
@@ -2544,7 +2544,7 @@ async fn handle_compact_soldering_proof_operator(
             &soldering_for_validation,
             &vk,
             &claimed_finalized_indices,
-            static_input,
+            static_inputs,
         )
     })
     .await
@@ -6476,8 +6476,8 @@ async fn handle_assert_sent_verifier(
     let assert_witness = extract_operator_assert_witness_for_challenge(&graph, assert_txin)
         .map_err(|e| anyhow!("failed to extract operator assert witness: {e}"))?;
     let vk = crate::vk::get_vk().await.context("load Groth16 verifying key for operator assert")?;
-    let static_input = derive_operator_static_input()?;
-    if pubin_consistent && assert_witness.verify_groth16_proof(&vk, &[static_input]) {
+    let static_inputs = derive_operator_static_inputs()?;
+    if pubin_consistent && assert_witness.verify_groth16_proof(&vk, &static_inputs) {
         tracing::info!(
             "Skip ChallengeAssert for {instance_id}:{graph_id}: operator assert proof is valid"
         );
@@ -6532,7 +6532,7 @@ pub async fn broadcast_verifier_challenge_assert_tx(
     let assert_witness = extract_operator_assert_witness_for_challenge(graph, assert_txin)
         .map_err(|e| anyhow!("failed to extract operator assert witness: {e}"))?;
     let vk = crate::vk::get_vk().await.context("load Groth16 verifying key for operator assert")?;
-    let static_input = derive_operator_static_input()?;
+    let static_inputs = derive_operator_static_inputs()?;
 
     let Some(saved_verifier_state) =
         load_babe_setup_state(local_db, instance_id, graph_id)?.and_then(|state| state.verifier)
@@ -6559,7 +6559,7 @@ pub async fn broadcast_verifier_challenge_assert_tx(
         &saved_verifier_state.setup_package,
         &saved_verifier_state.finalized_indices,
         &vk,
-        static_input,
+        static_inputs,
         &assert_witness,
         verifier_index,
     )?;

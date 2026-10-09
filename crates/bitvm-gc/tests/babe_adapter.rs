@@ -26,7 +26,7 @@ fn verifier_pubkey() -> bitcoin::PublicKey {
 }
 
 #[test]
-#[ignore = "requires FGC_GATES_PATH, FGC_OUT_INDICES_PATH, SGC_GATES_PATH, SGC_OUT_INDICES_PATH, FGC_COMPACT_GATES_PATH, FGC_COMPACT_OUT_INDICES_PATH, SGC_COMPACT_GATES_PATH, SGC_COMPACT_OUT_INDICES_PATH runtime assets"]
+#[ignore = "requires FGC_*/SGC_* GC assets generated from the DummyMulCircuit VK"]
 fn real_setup_restores_private_state_and_verifies_soldering_proof() {
     let mut rng = ChaCha12Rng::seed_from_u64(42);
     let a = Fr::from(3_u64);
@@ -36,7 +36,8 @@ fn real_setup_restores_private_state_and_verifies_soldering_proof() {
         &mut rng,
     )
     .expect("groth16 setup");
-    let static_public_inputs = a * b;
+    // Ziren wrap layout: [a·b (static), a·a (dynamic), b (static)].
+    let static_public_inputs = [a * b, b];
     let _dynamic_public_inputs = a * a;
 
     let (package, private_state) =
